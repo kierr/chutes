@@ -341,8 +341,6 @@ def build_sglang_chute(
             download_path,
             cache_version=getattr(self, "_source_hash", None),
         )
-        os.environ["TRANSFORMERS_OFFLINE"] = "1"
-        os.environ["HF_HUB_OFFLINE"] = "1"
         os.environ["SGL_MODEL_NAME"] = self.name
         os.environ["SGL_REVISION"] = revision
 

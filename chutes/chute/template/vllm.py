@@ -408,7 +408,6 @@ def build_vllm_chute(
 
         env = os.environ.copy()
         env["PYTHONDONTWRITEBYTECODE"] = "1"
-        env["HF_HUB_OFFLINE"] = "1"
         env["SGL_MODEL_NAME"] = self.name
         env["SGL_REVISION"] = revision
         if use_mtls:
