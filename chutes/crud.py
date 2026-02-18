@@ -216,7 +216,7 @@ def list_images(
     name: str | None = typer.Option(None, help="Name of image to filter by"),
     limit: int = typer.Option(25, help="Number of images to display per page"),
     page: int = typer.Option(0, help="The page number to display"),
-    include_public: bool = typer.Option(False, help="Include public chutes"),
+    include_public: bool = typer.Option(False, help="Include public images"),
 ):
     return asyncio.run(
         _list_objects(
