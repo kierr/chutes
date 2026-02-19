@@ -47,7 +47,6 @@ setup(
         "uvicorn>=0.32.0,<0.39",
         "pydantic>=2.9,<3",
         "orjson>=3.10",
-        "fickling>=0.1.3",
         "setuptools>=0.75",
         "substrate-interface>=1.7.11",
         "rich>=13.0.0",
@@ -63,7 +62,7 @@ setup(
         "semver",
         "huggingface_hub",
         "setproctitle",
-        "cllmv==0.1.2",
+        "cllmv==0.1.3",
     ],
     extras_require={
         "dev": [

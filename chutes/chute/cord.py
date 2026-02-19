@@ -8,7 +8,6 @@ import base64
 import aiohttp
 import asyncio
 import backoff
-import fickling
 import orjson as json
 from pydantic import ValidationError
 from typing import Optional, Dict, Any
@@ -578,32 +577,16 @@ class Cord:
         if self._passthrough_port is None:
             self._passthrough_port = 8000
         args, kwargs = None, None
-        if request.state.serialized:
-            try:
-                args = fickling.load(
-                    gzip.decompress(base64.b64decode(request.state.decrypted["args"]))
-                )
-                kwargs = fickling.load(
-                    gzip.decompress(base64.b64decode(request.state.decrypted["kwargs"]))
-                )
-            except fickling.exception.UnsafeFileError as exc:
-                message = f"Detected potentially hazardous call arguments, blocking: {exc}"
-                logger.error(message)
-                raise HTTPException(
-                    status_code=status.HTTP_401_FORBIDDEN,
-                    detail=message,
-                )
+        if not self._passthrough:
+            args = [request.state.decrypted] if request.state.decrypted else []
+            kwargs = {}
         else:
-            if not self._passthrough:
-                args = [request.state.decrypted] if request.state.decrypted else []
-                kwargs = {}
+            decrypted = request.state.decrypted
+            if isinstance(decrypted, dict) and "json" in decrypted and "params" in decrypted:
+                kwargs = decrypted  # Already wrapped for passthrough
             else:
-                decrypted = request.state.decrypted
-                if isinstance(decrypted, dict) and "json" in decrypted and "params" in decrypted:
-                    kwargs = decrypted  # Already wrapped for passthrough
-                else:
-                    kwargs = {"json": decrypted} if decrypted else {}
-                args = []
+                kwargs = {"json": decrypted} if decrypted else {}
+            args = []
 
         # Set a custom request ID for SGLang passthroughs.
         if self._is_sglang_passthrough() and isinstance(kwargs.get("json"), dict):
