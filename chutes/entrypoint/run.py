@@ -1991,10 +1991,6 @@ def run_chute(
                     host=host or "0.0.0.0",
                     port=logging_port,
                     dev=dev,
-                    certfile=ssl_certfile,
-                    keyfile=ssl_keyfile,
-                    keyfile_password=ssl_keyfile_password,
-                    ca_certs=ssl_ca_certs,
                 )
             )
 
