@@ -1,4 +1,3 @@
-import os
 import ctypes
 import asyncio
 from functools import lru_cache

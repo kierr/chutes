@@ -1878,6 +1878,14 @@ def run_chute(
         elif generate_inspecto_hash:
             from chutes.inspecto import generate_hash
 
+            async with aiohttp.ClientSession() as session:
+                async with session.get("https://proxy.chutes.ai/misc/proxy?url=ping") as resp:
+                    logger.info("Pong.")
+
+            aegis_commitment = init_aegis("42")
+            aegis_nonce = aegis_get_nonce()
+
+            os.environ["LD_PRELOAD"] = "/usr/local/lib/chutes-aegis.so"
             inspecto_hash = await generate_hash(hash_type="base")
             print(inspecto_hash)
             return
