@@ -5,10 +5,13 @@ import gzip
 import time
 import pickle
 import base64
+import inspect
+import functools
 import aiohttp
 import asyncio
 import backoff
 import orjson as json
+from concurrent.futures import ThreadPoolExecutor
 from pydantic import ValidationError
 from typing import Optional, Dict, Any
 from fastapi import Request, HTTPException, status
@@ -26,6 +29,35 @@ import chutes.metrics as metrics
 
 # Simple regex to check for custom path overrides.
 PATH_RE = re.compile(r"^(/[a-z0-9_]+[a-z0-9-_]*)+$")
+
+# Dedicated thread pool for running ALL user code (sync or async) so that
+# long-running or blocking work never starves the main asyncio event loop.
+# This keeps health-check / ping endpoints responsive even when user code
+# blocks for minutes — including "async def" functions that never actually
+# await anything (a common pattern in ML inference code).
+_user_code_executor = ThreadPoolExecutor(
+    max_workers=int(os.environ.get("CHUTES_USER_CODE_THREADS", 4)),
+    thread_name_prefix="chute-user",
+)
+
+
+def _is_async(func) -> bool:
+    """Return True when *func* is a coroutine function or async generator."""
+    return inspect.iscoroutinefunction(func) or inspect.isasyncgenfunction(func)
+
+
+def _run_user_coro(coro):
+    """Run an async user coroutine in a *new* event loop on the current (worker) thread.
+
+    This is called from within the thread pool so the main event loop is never
+    touched.  A fresh loop is created and destroyed per call — cheap relative to
+    the minutes-long inference workloads this is designed for.
+    """
+    loop = asyncio.new_event_loop()
+    try:
+        return loop.run_until_complete(coro)
+    finally:
+        loop.close()
 
 
 class Cord:
@@ -308,6 +340,78 @@ class Cord:
             ) as response:
                 yield response
 
+    async def _run_in_thread(self, *args, **kwargs):
+        """Run user function (sync *or* async) in the dedicated thread pool.
+
+        Sync functions are called directly in the worker thread.  Async
+        functions get a fresh event loop in the worker thread so even a
+        badly-written ``async def`` that blocks for minutes cannot starve
+        the main loop.
+        """
+        loop = asyncio.get_running_loop()
+        if _is_async(self._func):
+            return await loop.run_in_executor(
+                _user_code_executor,
+                functools.partial(_run_user_coro, self._func(self._app, *args, **kwargs)),
+            )
+        return await loop.run_in_executor(
+            _user_code_executor,
+            functools.partial(self._func, self._app, *args, **kwargs),
+        )
+
+    async def _iter_generator_in_thread(self, *args, **kwargs):
+        """
+        Bridge a user generator (sync *or* async) to an async generator by
+        running it in a dedicated thread.  Items are passed back to the main
+        event loop via an asyncio.Queue so health-check endpoints stay
+        responsive between yields.
+        """
+        loop = asyncio.get_running_loop()
+        queue: asyncio.Queue = asyncio.Queue(maxsize=64)
+        _SENTINEL = object()
+
+        def _produce_sync():
+            try:
+                for item in self._func(self._app, *args, **kwargs):
+                    asyncio.run_coroutine_threadsafe(queue.put(item), loop).result()
+            except Exception as exc:
+                asyncio.run_coroutine_threadsafe(queue.put(exc), loop).result()
+            finally:
+                asyncio.run_coroutine_threadsafe(queue.put(_SENTINEL), loop).result()
+
+        def _produce_async():
+            inner_loop = asyncio.new_event_loop()
+            try:
+                agen = self._func(self._app, *args, **kwargs)
+
+                async def _drain():
+                    try:
+                        async for item in agen:
+                            asyncio.run_coroutine_threadsafe(queue.put(item), loop).result()
+                    except Exception as exc:
+                        asyncio.run_coroutine_threadsafe(queue.put(exc), loop).result()
+                    finally:
+                        asyncio.run_coroutine_threadsafe(queue.put(_SENTINEL), loop).result()
+
+                inner_loop.run_until_complete(_drain())
+            finally:
+                inner_loop.close()
+
+        if inspect.isasyncgenfunction(self._func):
+            producer = _produce_async
+        else:
+            producer = _produce_sync
+
+        loop.run_in_executor(_user_code_executor, producer)
+
+        while True:
+            item = await queue.get()
+            if item is _SENTINEL:
+                break
+            if isinstance(item, Exception):
+                raise item
+            yield item
+
     async def _remote_call(self, request: Request, *args, **kwargs):
         """
         Function call from within the remote context, that is, the code that actually
@@ -405,8 +509,12 @@ class Cord:
                 )
                 return result
 
-            # Non-passthrough call (local Python function)
-            response = await asyncio.wait_for(self._func(self._app, *args, **kwargs), 1800)
+            # Non-passthrough call (local Python function).
+            # ALL user code is offloaded to a dedicated thread pool so that
+            # long-running or blocking work (including "async def" functions
+            # that never truly await) cannot starve the event loop and prevent
+            # health-check pings from responding.
+            response = await asyncio.wait_for(self._run_in_thread(*args, **kwargs), 1800)
             logger.success(
                 f"Completed request [{self._func.__name__} passthrough={self._passthrough}] "
                 f"in {time.time() - started_at} seconds"
@@ -508,7 +616,9 @@ class Cord:
                 )
                 return
 
-            async for data in self._func(self._app, *args, **kwargs):
+            # ALL user generators (sync and async) are bridged through a
+            # dedicated thread so the event loop stays responsive.
+            async for data in self._iter_generator_in_thread(*args, **kwargs):
                 if encrypt:
                     yield encrypt(data) + "\n"
                 else:
