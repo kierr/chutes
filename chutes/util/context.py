@@ -4,6 +4,7 @@ Helper to distinguish between local and remote contexts.
 
 import os
 
+
 def is_remote() -> bool:
     """
     Check if we are in the remote context.

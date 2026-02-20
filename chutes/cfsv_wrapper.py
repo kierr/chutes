@@ -6,7 +6,8 @@ from fastapi import Request
 
 class CFSVWrapper:
     def __init__(
-        self, lib_path=None,
+        self,
+        lib_path=None,
     ):
         if lib_path:
             self.lib = ctypes.CDLL(lib_path)

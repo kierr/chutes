@@ -1898,17 +1898,11 @@ def run_chute(
                 validator_nonce = None
                 bootstrap_nonce = secrets.token_hex(16)
                 logger.info(
-                    "[aegis-debug] init start dev={} pid={} thread={} nonce_len={}",
-                    dev,
-                    os.getpid(),
-                    threading.get_ident(),
-                    len(bootstrap_nonce),
+                    f"[aegis-debug] init start dev={dev} pid={os.getpid()} thread={threading.get_ident()} nonce_len={len(bootstrap_nonce)}"
                 )
                 init_ok = init_aegis(bootstrap_nonce)
                 logger.info(
-                    "[aegis-debug] init done ok={} commitment_prefix={}",
-                    bool(init_ok),
-                    init_ok[:24] if init_ok else None,
+                    f"[aegis-debug] init done ok={bool(init_ok)} commitment_prefix={init_ok[:24] if init_ok else None}"
                 )
                 if not init_ok:
                     logger.error("Aegis runtime initialization failed")
@@ -1923,59 +1917,43 @@ def run_chute(
                 cn_source = miner_ss58 or "dev"
             cn = f"{cn_source}.int.chutes.dev"
             logger.info(
-                "[aegis-debug] cert start cn={} pid={} thread={} handle_initialized={} handle_ptr={}",
-                cn,
-                os.getpid(),
-                threading.get_ident(),
-                getattr(_aegis_handle, "_initialized", None),
-                getattr(_aegis_handle, "_handle", None),
+                f"[aegis-debug] cert start cn={cn} pid={os.getpid()} thread={threading.get_ident()} "
+                f"handle_initialized={getattr(_aegis_handle, '_initialized', None)} "
+                f"handle_ptr={getattr(_aegis_handle, '_handle', None)}"
             )
-            # Try mTLS first (nonce-bound), fall back to plain TLS cert.
+            # Generate mTLS cert (nonce-bound).
             mtls_nonce = validator_nonce if validator_nonce else None
-            tls_result = None
             client_cert_pem = None
             client_key_pem = None
             key_password = None
             ca_cert_pem = None
 
-            if mtls_nonce:
-                tls_result = _aegis_handle.gen_tls_mtls(cn, mtls_nonce)
-            if tls_result:
-                (
-                    cert_pem,
-                    key_pem,
-                    cert_sig,
-                    ca_cert_pem,
-                    client_cert_pem,
-                    client_key_pem,
-                    key_password,
-                ) = tls_result
-                logger.info(
-                    "[aegis-debug] mtls material cert_len={} key_len={} sig_prefix={} ca_len={} client_cert_len={}",
-                    len(cert_pem),
-                    len(key_pem),
-                    cert_sig[:16] if cert_sig else None,
-                    len(ca_cert_pem),
-                    len(client_cert_pem),
+            if not mtls_nonce:
+                logger.error("No validator nonce available for mTLS cert generation")
+                sys.exit(137)
+
+            tls_result = _aegis_handle.gen_tls_mtls(cn, mtls_nonce)
+            if not tls_result:
+                logger.error(
+                    f"Aegis mTLS certificate generation failed handle_initialized={getattr(_aegis_handle, '_initialized', None)} "
+                    f"handle_ptr={getattr(_aegis_handle, '_handle', None)}"
                 )
-            else:
-                # Fallback to plain TLS cert generation.
-                tls_result = _aegis_handle.gen_tls_cert(cn)
-                logger.info("[aegis-debug] cert done ok={}", bool(tls_result))
-                if not tls_result:
-                    logger.error(
-                        "Aegis TLS certificate generation failed handle_initialized={} handle_ptr={}",
-                        getattr(_aegis_handle, "_initialized", None),
-                        getattr(_aegis_handle, "_handle", None),
-                    )
-                    sys.exit(137)
-                cert_pem, key_pem, cert_sig = tls_result
-                logger.info(
-                    "[aegis-debug] cert material cert_len={} key_len={} sig_prefix={}",
-                    len(cert_pem),
-                    len(key_pem),
-                    cert_sig[:16] if cert_sig else None,
-                )
+                sys.exit(137)
+
+            (
+                cert_pem,
+                key_pem,
+                cert_sig,
+                ca_cert_pem,
+                client_cert_pem,
+                client_key_pem,
+                key_password,
+            ) = tls_result
+            logger.info(
+                f"[aegis-debug] mtls material cert_len={len(cert_pem)} key_len={len(key_pem)} "
+                f"sig_prefix={cert_sig[:16] if cert_sig else None} ca_len={len(ca_cert_pem)} "
+                f"client_cert_len={len(client_cert_pem)}"
+            )
 
             # Write cert files to /dev/shm/ (key is passphrase-encrypted if mTLS).
             tls_cert_path = f"/dev/shm/aegis_{secrets.token_hex(8)}_cert.pem"
