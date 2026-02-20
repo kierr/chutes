@@ -1632,6 +1632,8 @@ async def _gather_devices_and_initialize(
     if cert_pem:
         body["tls_cert"] = cert_pem
         body["tls_cert_sig"] = cert_sig
+    if ca_cert_pem:
+        body["tls_ca_cert"] = ca_cert_pem
 
     # mTLS client cert + key (for API to connect back to us)
     if tls_client_cert:
