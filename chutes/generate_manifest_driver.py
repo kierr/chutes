@@ -44,10 +44,12 @@ def load_library(lib_path=None):
 
 
 def compile_py_file(filepath):
-    """Compile a .py file and return its code object, or None on failure."""
+    """Compile a .py file and return its code object, or None on failure.
+    """
     try:
-        with open(filepath, "r", encoding="utf-8", errors="replace") as f:
-            source = f.read()
+        with open(filepath, "rb") as f:
+            raw = f.read()
+        source = raw.decode("utf-8")
         return compile(source, filepath, "exec")
     except (SyntaxError, ValueError, TypeError, UnicodeDecodeError):
         return None
