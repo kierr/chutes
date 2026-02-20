@@ -7,9 +7,13 @@ from fastapi import Request
 
 class CFSVWrapper:
     def __init__(
-        self, lib_path=os.path.join(os.path.dirname(os.path.abspath(__file__)), "chutes-cfsv.so")
+        self, lib_path=None,
     ):
-        self.lib = ctypes.CDLL(lib_path)
+        if lib_path:
+            self.lib = ctypes.CDLL(lib_path)
+        else:
+            # CFSV is compiled into chutes-aegis.so (loaded via LD_PRELOAD).
+            self.lib = ctypes.CDLL(None)
 
         # cfsv_challenge(base_path, salt, sparse, index_file, exclude_path, result_buf, result_buf_size)
         self.lib.cfsv_challenge.argtypes = [
