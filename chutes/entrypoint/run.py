@@ -166,6 +166,11 @@ class _ConnStats:
 
 _conn_stats = _ConnStats()
 
+# Map public API paths to internal cord paths for E2E requests.
+# Populated during chute initialization in _run_chute().
+# Key: (public_api_path, method, stream) -> internal cord path
+_public_api_path_map: dict[tuple[str, str, bool], str] = {}
+
 
 @lru_cache(maxsize=1)
 def get_netnanny_ref():
@@ -1356,6 +1361,20 @@ class GraValMiddleware(BaseHTTPMiddleware):
                 )
             actual_path = decrypted.decode().rstrip("?")
             logger.info(f"Decrypted request path: {actual_path} from input path: {path}")
+
+            # For E2E requests, the client encrypts the public API path (e.g. /v1/chat/completions)
+            # but production routes are registered at internal cord paths (e.g. /chat).
+            # Remap if we have a matching public_api_path.
+            method = request.method.upper()
+            e2e_stream = request.headers.get("X-E2E-Stream", "").lower() == "true"
+            internal_path = _public_api_path_map.get((actual_path, method, e2e_stream))
+            if not internal_path:
+                # Fallback: try the opposite stream value
+                internal_path = _public_api_path_map.get((actual_path, method, not e2e_stream))
+            if internal_path:
+                logger.info(f"Remapped public API path {actual_path} -> {internal_path}")
+                actual_path = internal_path
+
             request.scope["path"] = actual_path
         except Exception:
             return ORJSONResponse(
@@ -1413,7 +1432,12 @@ class GraValMiddleware(BaseHTTPMiddleware):
             if hasattr(response, "body_iterator"):
                 original_iterator = response.body_iterator
                 is_e2e = getattr(request.state, "e2e", False)
-                is_e2e_stream = is_e2e and request.headers.get("X-E2E-Stream", "").lower() == "true"
+                is_e2e_stream = (
+                    is_e2e
+                    and response.status_code >= 200
+                    and response.status_code < 300
+                    and request.headers.get("X-E2E-Stream", "").lower() == "true"
+                )
 
                 if is_e2e_stream:
                     handle = get_aegis_handle()
@@ -1519,10 +1543,13 @@ class GraValMiddleware(BaseHTTPMiddleware):
         finally:
             if not response or not hasattr(response, "body_iterator"):
                 _conn_stats.requests_in_flight.pop(request.request_id, None)
-            e2e_ctx = getattr(request.state, "e2e_ctx", None)
-            if e2e_ctx:
-                get_aegis_handle().e2e_free_ctx(e2e_ctx)
-                request.state.e2e_ctx = None
+                # Safety-net: free e2e_ctx if it wasn't consumed by a streaming iterator.
+                # For streaming E2E responses, the iterator's own finally handles cleanup,
+                # so we only free here for non-iterator paths (errors before response, etc).
+                e2e_ctx = getattr(request.state, "e2e_ctx", None)
+                if e2e_ctx:
+                    get_aegis_handle().e2e_free_ctx(e2e_ctx)
+                    request.state.e2e_ctx = None
 
 
 def start_dummy_socket(port_mapping, symmetric_key):
@@ -2173,6 +2200,16 @@ def run_chute(
         logger.info("[aegis-debug] chute.initialize start")
         await chute.initialize()
         logger.info("[aegis-debug] chute.initialize complete")
+
+        # Build public_api_path -> internal path mapping for E2E requests.
+        for cord in chute._cords:
+            if cord._public_api_path and cord.path:
+                method = (cord._public_api_method or "POST").upper()
+                stream = bool(cord._stream)
+                _public_api_path_map[(cord._public_api_path, method, stream)] = cord.path
+                logger.info(
+                    f"E2E path map: ({cord._public_api_path}, {method}, stream={stream}) -> {cord.path}"
+                )
 
         # Encryption/rate-limiting middleware setup.
         if dev:
