@@ -1636,11 +1636,10 @@ async def _gather_devices_and_initialize(
     if ca_cert_pem:
         body["tls_ca_cert"] = ca_cert_pem
 
-    # mTLS client cert + key (for API to connect back to us)
+    # mTLS client cert + key (for API to connect back to us).
     if tls_client_cert:
         body["tls_client_cert"] = tls_client_cert
         body["tls_client_key"] = tls_client_key
-        body["tls_client_key_password"] = tls_client_key_password
 
     # E2E public key (for clients to encrypt requests to us)
     if e2e_pubkey:
