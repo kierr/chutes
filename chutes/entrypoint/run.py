@@ -171,6 +171,10 @@ _conn_stats = _ConnStats()
 # Key: (public_api_path, method, stream) -> internal cord path
 _public_api_path_map: dict[tuple[str, str, bool], str] = {}
 
+# Set of internal cord paths that are allowed for E2E requests.
+# Only cords with a public_api_path are eligible.
+_e2e_allowed_paths: set[str] = set()
+
 
 @lru_cache(maxsize=1)
 def get_netnanny_ref():
@@ -1285,26 +1289,21 @@ class GraValMiddleware(BaseHTTPMiddleware):
                     content={"detail": f"Decryption failed: {exc}"},
                 )
 
-            def _encrypt(plaintext: bytes):
-                if isinstance(plaintext, str):
-                    plaintext = plaintext.encode()
-                # E2E: gzip + encrypt response with ML-KEM before transport encryption
-                if getattr(request.state, "e2e", False):
-                    handle = get_aegis_handle()
-                    compressed = gzip.compress(plaintext)
-                    e2e_blob = handle.e2e_encrypt_response(request.state.e2e_ctx, compressed)
-                    if e2e_blob:
-                        plaintext = e2e_blob
-                    handle.e2e_free_ctx(request.state.e2e_ctx)
-                    request.state.e2e_ctx = None
-                else:
-                    plaintext = gzip.compress(plaintext)
-                encrypted = aegis_encrypt(plaintext)
-                if not encrypted:
-                    raise RuntimeError("Encryption failed")
-                return base64.b64encode(encrypted).decode()
+            # For E2E requests, the middleware handles all encryption
+            # (both E2E and transport) in the response path, so we skip
+            # setting _encrypt to avoid double-encryption and ctx conflicts.
+            if not getattr(request.state, "e2e", False):
 
-            request.state._encrypt = _encrypt
+                def _encrypt(plaintext: bytes):
+                    if isinstance(plaintext, str):
+                        plaintext = plaintext.encode()
+                    plaintext = gzip.compress(plaintext)
+                    encrypted = aegis_encrypt(plaintext)
+                    if not encrypted:
+                        raise RuntimeError("Encryption failed")
+                    return base64.b64encode(encrypted).decode()
+
+                request.state._encrypt = _encrypt
 
         return await call_next(request)
 
@@ -1364,16 +1363,25 @@ class GraValMiddleware(BaseHTTPMiddleware):
 
             # For E2E requests, the client encrypts the public API path (e.g. /v1/chat/completions)
             # but production routes are registered at internal cord paths (e.g. /chat).
-            # Remap if we have a matching public_api_path.
-            method = request.method.upper()
-            e2e_stream = request.headers.get("X-E2E-Stream", "").lower() == "true"
-            internal_path = _public_api_path_map.get((actual_path, method, e2e_stream))
-            if not internal_path:
-                # Fallback: try the opposite stream value
-                internal_path = _public_api_path_map.get((actual_path, method, not e2e_stream))
-            if internal_path:
-                logger.info(f"Remapped public API path {actual_path} -> {internal_path}")
-                actual_path = internal_path
+            # Remap if we have a matching public_api_path, and enforce that only
+            # cords with a public_api_path are reachable via E2E (no internal endpoints).
+            is_e2e_request = request.headers.get("X-E2E-Encrypted") == "true"
+            if is_e2e_request and _public_api_path_map:
+                method = request.method.upper()
+                e2e_stream = request.headers.get("X-E2E-Stream", "").lower() == "true"
+                internal_path = _public_api_path_map.get((actual_path, method, e2e_stream))
+                if not internal_path:
+                    # Fallback: try the opposite stream value
+                    internal_path = _public_api_path_map.get((actual_path, method, not e2e_stream))
+                if internal_path:
+                    logger.info(f"Remapped public API path {actual_path} -> {internal_path}")
+                    actual_path = internal_path
+                elif actual_path not in _e2e_allowed_paths:
+                    logger.warning(f"E2E request for disallowed path: {actual_path}")
+                    return ORJSONResponse(
+                        status_code=status.HTTP_403_FORBIDDEN,
+                        content={"detail": "Path not available via E2E"},
+                    )
 
             request.scope["path"] = actual_path
         except Exception:
@@ -2207,6 +2215,7 @@ def run_chute(
                 method = (cord._public_api_method or "POST").upper()
                 stream = bool(cord._stream)
                 _public_api_path_map[(cord._public_api_path, method, stream)] = cord.path
+                _e2e_allowed_paths.add(cord.path)
                 logger.info(
                     f"E2E path map: ({cord._public_api_path}, {method}, stream={stream}) -> {cord.path}"
                 )
@@ -2464,19 +2473,33 @@ def run_chute(
         # Start the uvicorn process, whether in job mode or not.
         import ssl as _ssl
 
-        config = Config(
-            app=chute,
-            host=host or "0.0.0.0",
-            port=port or 8000,
-            limit_concurrency=1000,
-            ssl_certfile=ssl_certfile,
-            ssl_keyfile=ssl_keyfile,
-            ssl_keyfile_password=ssl_keyfile_password,
-            ssl_ca_certs=ssl_ca_certs,
-            ssl_cert_reqs=_ssl.CERT_REQUIRED if ssl_ca_certs else _ssl.CERT_NONE,
-        )
-        server = Server(config)
-        await server.serve()
+        # Retry server startup to handle transient SSL cert loading failures
+        # (e.g. aegis-generated cert/key PEM not yet valid on first attempt).
+        max_attempts = 3
+        for attempt in range(1, max_attempts + 1):
+            try:
+                config = Config(
+                    app=chute,
+                    host=host or "0.0.0.0",
+                    port=port or 8000,
+                    limit_concurrency=1000,
+                    ssl_certfile=ssl_certfile,
+                    ssl_keyfile=ssl_keyfile,
+                    ssl_keyfile_password=ssl_keyfile_password,
+                    ssl_ca_certs=ssl_ca_certs,
+                    ssl_cert_reqs=_ssl.CERT_REQUIRED if ssl_ca_certs else _ssl.CERT_NONE,
+                )
+                server = Server(config)
+                await server.serve()
+                break
+            except OSError as exc:
+                if attempt < max_attempts:
+                    logger.warning(
+                        f"Uvicorn SSL startup failed (attempt {attempt}/{max_attempts}): {exc}, retrying in 2s..."
+                    )
+                    await asyncio.sleep(2)
+                else:
+                    raise
 
     # Kick everything off
     async def _logged_run():
