@@ -1412,11 +1412,16 @@ class GraValMiddleware(BaseHTTPMiddleware):
 
             if hasattr(response, "body_iterator"):
                 original_iterator = response.body_iterator
-                is_e2e_stream = getattr(request.state, "e2e", False)
+                is_e2e = getattr(request.state, "e2e", False)
+                is_e2e_stream = is_e2e and request.headers.get("X-E2E-Stream", "").lower() == "true"
 
                 if is_e2e_stream:
                     handle = get_aegis_handle()
                     e2e_ctx = getattr(request.state, "e2e_ctx", None)
+                    # Remove Content-Length since encrypted SSE output is larger than original
+                    if "content-length" in response.headers:
+                        del response.headers["content-length"]
+                    response.media_type = "text/event-stream"
                     # Determine if this is a vLLM/sglang chute for usage extraction
                     is_vllm = (
                         getattr(locals().get("chute_obj"), "standard_template", None) == "vllm"
@@ -1461,6 +1466,40 @@ class GraValMiddleware(BaseHTTPMiddleware):
                             _conn_stats.requests_in_flight.pop(request.request_id, None)
 
                     response.body_iterator = e2e_wrapped_iterator()
+                elif is_e2e:
+                    # Non-streaming E2E: collect body, encrypt as single blob
+                    handle = get_aegis_handle()
+                    e2e_ctx = getattr(request.state, "e2e_ctx", None)
+                    try:
+                        body_parts = []
+                        async for chunk in original_iterator:
+                            if chunk:
+                                body_parts.append(
+                                    chunk if isinstance(chunk, bytes) else chunk.encode()
+                                )
+                        raw_body = b"".join(body_parts)
+                        compressed = gzip.compress(raw_body)
+                        e2e_blob = handle.e2e_encrypt_response(e2e_ctx, compressed)
+                        if e2e_blob is None:
+                            raise RuntimeError("E2E encryption failed")
+                        encrypted = aegis_encrypt(e2e_blob)
+                        if not encrypted:
+                            raise RuntimeError("Transport encryption failed")
+                        payload = base64.b64encode(encrypted)
+                        return Response(
+                            content=payload,
+                            status_code=response.status_code,
+                            headers={
+                                k: v
+                                for k, v in response.headers.items()
+                                if k.lower() != "content-length"
+                            },
+                            media_type=response.media_type,
+                        )
+                    finally:
+                        handle.e2e_free_ctx(e2e_ctx)
+                        request.state.e2e_ctx = None
+                        _conn_stats.requests_in_flight.pop(request.request_id, None)
                 else:
 
                     async def wrapped_iterator():
@@ -1480,6 +1519,10 @@ class GraValMiddleware(BaseHTTPMiddleware):
         finally:
             if not response or not hasattr(response, "body_iterator"):
                 _conn_stats.requests_in_flight.pop(request.request_id, None)
+            e2e_ctx = getattr(request.state, "e2e_ctx", None)
+            if e2e_ctx:
+                get_aegis_handle().e2e_free_ctx(e2e_ctx)
+                request.state.e2e_ctx = None
 
 
 def start_dummy_socket(port_mapping, symmetric_key):
