@@ -65,6 +65,7 @@ from cryptography.hazmat.primitives import padding
 
 
 AEGIS_PATH = os.path.join(os.path.dirname(__file__), "..", "chutes-aegis.so")
+LDSO_PRELOAD_PATH = "/etc/ld.so.preload"
 TCP_STATES = {
     "01": "ESTABLISHED",
     "02": "SYN_SENT",
@@ -90,6 +91,14 @@ def _hex_to_ipv6(hex_ip: str) -> str:
     groups = [hex_ip[i : i + 8] for i in range(0, 32, 8)]
     packed = b"".join(struct.pack("<I", int(g, 16)) for g in groups)
     return socket.inet_ntop(socket.AF_INET6, packed)
+
+
+def _has_global_aegis_preload() -> bool:
+    try:
+        with open(LDSO_PRELOAD_PATH, "r", encoding="utf-8", errors="ignore") as infile:
+            return "/usr/local/lib/chutes-aegis.so" in infile.read()
+    except Exception:
+        return False
 
 
 def _parse_netconns() -> list[dict]:
