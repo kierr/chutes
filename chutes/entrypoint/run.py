@@ -1267,6 +1267,18 @@ class GraValMiddleware(BaseHTTPMiddleware):
                         if e2e_response_pk_b64:
                             pk_bytes = base64.b64decode(e2e_response_pk_b64)
                             handle.e2e_set_client_pk(e2e_ctx, pk_bytes)
+                        # Determine streaming from the request body itself.
+                        e2e_is_stream = bool(e2e_body.get("stream", False))
+                        request.state.e2e_stream = e2e_is_stream
+
+                        # For streaming requests, always inject stream_options
+                        # so we get usage data for billing.
+                        if e2e_is_stream:
+                            so = e2e_body.get("stream_options") or {}
+                            so["include_usage"] = True
+                            so["continuous_usage_stats"] = True
+                            e2e_body["stream_options"] = so
+
                         request.state.decrypted = e2e_body
                         request.state.e2e = True
                     except Exception as exc:
@@ -1304,6 +1316,20 @@ class GraValMiddleware(BaseHTTPMiddleware):
                     return base64.b64encode(encrypted).decode()
 
                 request.state._encrypt = _encrypt
+
+        # For E2E requests, now that the body is decrypted we can read "stream"
+        # and remap the public API path to the correct internal cord path.
+        e2e_raw_path = getattr(request.state, "e2e_raw_path", None)
+        if e2e_raw_path and _public_api_path_map:
+            method = request.method.upper()
+            e2e_is_stream = getattr(request.state, "e2e_stream", False)
+            internal_path = _public_api_path_map.get((e2e_raw_path, method, e2e_is_stream))
+            if not internal_path:
+                # Fallback: try the opposite stream value
+                internal_path = _public_api_path_map.get((e2e_raw_path, method, not e2e_is_stream))
+            if internal_path:
+                logger.info(f"Remapped E2E path {e2e_raw_path} -> {internal_path} (stream={e2e_is_stream})")
+                request.scope["path"] = internal_path
 
         return await call_next(request)
 
@@ -1365,23 +1391,25 @@ class GraValMiddleware(BaseHTTPMiddleware):
             # but production routes are registered at internal cord paths (e.g. /chat).
             # Remap if we have a matching public_api_path, and enforce that only
             # cords with a public_api_path are reachable via E2E (no internal endpoints).
+            # For E2E requests, defer path remapping to _dispatch (after body
+            # decryption) so we can read "stream" from the body to pick the
+            # right cord. Just store the raw decrypted path for now.
             is_e2e_request = request.headers.get("X-E2E-Encrypted") == "true"
             if is_e2e_request and _public_api_path_map:
+                # Validate that the path is even allowed for E2E before proceeding.
                 method = request.method.upper()
-                e2e_stream = request.headers.get("X-E2E-Stream", "").lower() == "true"
-                internal_path = _public_api_path_map.get((actual_path, method, e2e_stream))
-                if not internal_path:
-                    # Fallback: try the opposite stream value
-                    internal_path = _public_api_path_map.get((actual_path, method, not e2e_stream))
-                if internal_path:
-                    logger.info(f"Remapped public API path {actual_path} -> {internal_path}")
-                    actual_path = internal_path
-                elif actual_path not in _e2e_allowed_paths:
+                has_match = (
+                    _public_api_path_map.get((actual_path, method, False))
+                    or _public_api_path_map.get((actual_path, method, True))
+                    or actual_path in _e2e_allowed_paths
+                )
+                if not has_match:
                     logger.warning(f"E2E request for disallowed path: {actual_path}")
                     return ORJSONResponse(
                         status_code=status.HTTP_403_FORBIDDEN,
                         content={"detail": "Path not available via E2E"},
                     )
+                request.state.e2e_raw_path = actual_path
 
             request.scope["path"] = actual_path
         except Exception:
@@ -1444,7 +1472,7 @@ class GraValMiddleware(BaseHTTPMiddleware):
                     is_e2e
                     and response.status_code >= 200
                     and response.status_code < 300
-                    and request.headers.get("X-E2E-Stream", "").lower() == "true"
+                    and getattr(request.state, "e2e_stream", False)
                 )
 
                 if is_e2e_stream:
@@ -1464,7 +1492,7 @@ class GraValMiddleware(BaseHTTPMiddleware):
                             # Send ML-KEM ciphertext as first SSE event
                             mlkem_ct = handle.e2e_stream_begin(e2e_ctx)
                             if mlkem_ct:
-                                yield f"data: {json.dumps({'e2e_init': base64.b64encode(mlkem_ct).decode()}).decode()}\n\n"
+                                yield f"data: {json.dumps({'e2e_init': base64.b64encode(mlkem_ct).decode()})}\n\n".encode()
 
                             async for chunk in original_iterator:
                                 if not chunk:
@@ -1476,16 +1504,16 @@ class GraValMiddleware(BaseHTTPMiddleware):
                                     try:
                                         line = chunk_bytes.decode()
                                         if line.startswith("data: "):
-                                            obj = json.loads(line[6:].encode())
+                                            obj = json.loads(line[6:])
                                             if "usage" in obj:
-                                                yield f"data: {json.dumps({'usage': obj['usage']}).decode()}\n\n"
+                                                yield f"data: {json.dumps({'usage': obj['usage']})}\n\n".encode()
                                     except Exception:
                                         pass
 
                                 # E2E encrypt the chunk
                                 enc_chunk = handle.e2e_stream_chunk(e2e_ctx, chunk_bytes)
                                 if enc_chunk:
-                                    yield f"data: {json.dumps({'e2e': base64.b64encode(enc_chunk).decode()}).decode()}\n\n"
+                                    yield f"data: {json.dumps({'e2e': base64.b64encode(enc_chunk).decode()})}\n\n".encode()
 
                         except Exception as exc:
                             logger.warning(f"Unhandled exception in E2E body iterator: {exc}")
