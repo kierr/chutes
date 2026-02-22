@@ -332,9 +332,10 @@ def build_sglang_chute(
         # Verify the cache.
         try:
             await verify_cache(repo_id=model_name, revision=revision)
-        except CacheVerificationError:
-            purge_model_cache(repo_id=model_name)
-            raise
+        except CacheVerificationError as exc:
+            if exc.reason != "not_found":
+                purge_model_cache(repo_id=model_name)
+                raise
 
         # Set torch inductor, flashinfer, etc., cache directories.
         set_default_cache_dirs(
