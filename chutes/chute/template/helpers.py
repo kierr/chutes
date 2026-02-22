@@ -68,7 +68,14 @@ def set_encrypted_env_var(env: dict, name: str, value: str) -> None:
 
 def mtls_enabled() -> bool:
     """Check if the engine supports mTLS. Set LLM_ENGINE_MTLS_ENABLE=1 in images that have it."""
-    return os.getenv("LLM_ENGINE_MTLS_ENABLE", "0") == "1"
+    if os.getenv("LLM_ENGINE_MTLS_ENABLE", "0") != "1":
+        return False
+    # mTLS requires the aegis LD_PRELOAD for encrypt_string.
+    preload = os.getenv("LD_PRELOAD", "")
+    if "chutes-aegis.so" not in preload:
+        logger.warning("LLM_ENGINE_MTLS_ENABLE=1 but aegis not in LD_PRELOAD, disabling mTLS")
+        return False
+    return True
 
 
 def get_current_hf_commit(model_name: str):
