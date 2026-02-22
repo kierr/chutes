@@ -1502,7 +1502,7 @@ class GraValMiddleware(BaseHTTPMiddleware):
                             # Send ML-KEM ciphertext as first SSE event
                             mlkem_ct = handle.e2e_stream_begin(e2e_ctx)
                             if mlkem_ct:
-                                yield f"data: {json.dumps({'e2e_init': base64.b64encode(mlkem_ct).decode()})}\n\n".encode()
+                                yield f"data: {json.dumps({'e2e_init': base64.b64encode(mlkem_ct).decode()}).decode()}\n\n".encode()
 
                             async for chunk in original_iterator:
                                 if not chunk:
@@ -1516,14 +1516,14 @@ class GraValMiddleware(BaseHTTPMiddleware):
                                         if line.startswith("data: "):
                                             obj = json.loads(line[6:])
                                             if "usage" in obj:
-                                                yield f"data: {json.dumps({'usage': obj['usage']})}\n\n".encode()
+                                                yield f"data: {json.dumps({'usage': obj['usage']}).decode()}\n\n".encode()
                                     except Exception:
                                         pass
 
                                 # E2E encrypt the chunk
                                 enc_chunk = handle.e2e_stream_chunk(e2e_ctx, chunk_bytes)
                                 if enc_chunk:
-                                    yield f"data: {json.dumps({'e2e': base64.b64encode(enc_chunk).decode()})}\n\n".encode()
+                                    yield f"data: {json.dumps({'e2e': base64.b64encode(enc_chunk).decode()}).decode()}\n\n".encode()
 
                         except Exception as exc:
                             logger.warning(f"Unhandled exception in E2E body iterator: {exc}")
