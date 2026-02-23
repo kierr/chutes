@@ -7,8 +7,8 @@ import sys
 
 # Disable .pyc reading before any further imports. cache_tag=None tells
 # importlib to skip __pycache__ entirely, preventing timed .pyc injection.
-# Netnanny also sets this, but we set it here as defense-in-depth in case
-# netnanny hasn't initialized yet.
+# Aegis also sets this, but we set it here as defense-in-depth in case
+# aegis hasn't initialized yet.
 sys.implementation._cache_tag = None
 sys.dont_write_bytecode = True
 
@@ -185,46 +185,52 @@ _e2e_allowed_paths: set[str] = set()
 
 
 @lru_cache(maxsize=1)
-def get_netnanny_ref():
-    netnanny = ctypes.CDLL(None, ctypes.RTLD_GLOBAL)
-    netnanny.generate_challenge_response.argtypes = [ctypes.c_char_p]
-    netnanny.generate_challenge_response.restype = ctypes.c_char_p
-    netnanny.verify_challenge_response.argtypes = [ctypes.c_char_p, ctypes.c_char_p, ctypes.c_uint8]
-    netnanny.verify_challenge_response.restype = ctypes.c_int
-    netnanny.initialize_network_control.argtypes = []
-    netnanny.initialize_network_control.restype = ctypes.c_int
-    netnanny.unlock_network.argtypes = []
-    netnanny.unlock_network.restype = ctypes.c_int
-    netnanny.lock_network.argtypes = []
-    netnanny.lock_network.restype = ctypes.c_int
-    netnanny.set_secure_fs.argtypes = [ctypes.c_char_p, ctypes.c_char_p, ctypes.c_int]
-    netnanny.set_secure_fs.restype = ctypes.c_int
-    netnanny.set_secure_env.argtypes = []
-    netnanny.set_secure_env.restype = ctypes.c_int
+def get_aegis_ref():
+    aegis = ctypes.CDLL(None, ctypes.RTLD_GLOBAL)
+    aegis.generate_challenge_response.argtypes = [ctypes.c_char_p]
+    aegis.generate_challenge_response.restype = ctypes.c_char_p
+    aegis.verify_challenge_response.argtypes = [ctypes.c_char_p, ctypes.c_char_p, ctypes.c_uint8]
+    aegis.verify_challenge_response.restype = ctypes.c_int
+    aegis.initialize_network_control.argtypes = []
+    aegis.initialize_network_control.restype = ctypes.c_int
+    aegis.unlock_network.argtypes = []
+    aegis.unlock_network.restype = ctypes.c_int
+    aegis.lock_network.argtypes = []
+    aegis.lock_network.restype = ctypes.c_int
+    aegis.lock_modules.argtypes = []
+    aegis.lock_modules.restype = ctypes.c_int
+    aegis.unlock_modules.argtypes = []
+    aegis.unlock_modules.restype = ctypes.c_int
+    aegis.aegis_arm.argtypes = []
+    aegis.aegis_arm.restype = ctypes.c_int
+    aegis.set_secure_fs.argtypes = [ctypes.c_char_p, ctypes.c_char_p, ctypes.c_int]
+    aegis.set_secure_fs.restype = ctypes.c_int
+    aegis.set_secure_env.argtypes = []
+    aegis.set_secure_env.restype = ctypes.c_int
     try:
-        netnanny.encrypt_string.argtypes = [ctypes.c_char_p]
-        netnanny.encrypt_string.restype = ctypes.c_char_p
-        netnanny.decrypt_string.argtypes = [ctypes.c_char_p]
-        netnanny.decrypt_string.restype = ctypes.c_char_p
+        aegis.encrypt_string.argtypes = [ctypes.c_char_p]
+        aegis.encrypt_string.restype = ctypes.c_char_p
+        aegis.decrypt_string.argtypes = [ctypes.c_char_p]
+        aegis.decrypt_string.restype = ctypes.c_char_p
     except AttributeError:
         # Backward compatibility with older preload libs.
         pass
 
     # Integrity query exports (V2 manifest).
-    netnanny.integrity_query_status.argtypes = [ctypes.c_char_p, ctypes.c_char_p, ctypes.c_size_t]
-    netnanny.integrity_query_status.restype = ctypes.c_int
-    netnanny.integrity_query_packages.argtypes = [ctypes.c_char_p, ctypes.c_char_p, ctypes.c_size_t]
-    netnanny.integrity_query_packages.restype = ctypes.c_int
-    netnanny.integrity_query_verify.argtypes = [
+    aegis.integrity_query_status.argtypes = [ctypes.c_char_p, ctypes.c_char_p, ctypes.c_size_t]
+    aegis.integrity_query_status.restype = ctypes.c_int
+    aegis.integrity_query_packages.argtypes = [ctypes.c_char_p, ctypes.c_char_p, ctypes.c_size_t]
+    aegis.integrity_query_packages.restype = ctypes.c_int
+    aegis.integrity_query_verify.argtypes = [
         ctypes.c_char_p,
         ctypes.c_char_p,
         ctypes.c_char_p,
         ctypes.c_size_t,
     ]
-    netnanny.integrity_query_verify.restype = ctypes.c_int
-    netnanny.integ_query_maps.argtypes = [ctypes.c_char_p, ctypes.c_size_t]
-    netnanny.integ_query_maps.restype = ctypes.c_int
-    return netnanny
+    aegis.integrity_query_verify.restype = ctypes.c_int
+    aegis.integ_query_maps.argtypes = [ctypes.c_char_p, ctypes.c_size_t]
+    aegis.integ_query_maps.restype = ctypes.c_int
+    return aegis
 
 
 class _AegisHandle:
@@ -977,9 +983,9 @@ def process_netnanny_challenge(chute, request: Request):
     Process a NetNanny challenge.
     """
     challenge = request.state.decrypted.get("challenge", "foo")
-    netnanny = get_netnanny_ref()
+    aegis = get_aegis_ref()
     return {
-        "hash": netnanny.generate_challenge_response(challenge.encode()),
+        "hash": aegis.generate_challenge_response(challenge.encode()),
         "allow_external_egress": chute.allow_external_egress,
     }
 
@@ -989,9 +995,9 @@ def process_integrity_status(request: Request):
     Query per-slot SHM integrity status (PID, cycle count, violations, manifest digest).
     """
     challenge = request.state.decrypted.get("challenge", "")
-    netnanny = get_netnanny_ref()
+    aegis = get_aegis_ref()
     buf = ctypes.create_string_buffer(8192)
-    netnanny.integrity_query_status(challenge.encode(), buf, 8192)
+    aegis.integrity_query_status(challenge.encode(), buf, 8192)
     try:
         return json.loads(buf.value)
     except Exception:
@@ -1003,9 +1009,9 @@ def process_integrity_packages(request: Request):
     Per-package verification: compile every .py in manifest, hash, compare.
     """
     challenge = request.state.decrypted.get("challenge", "")
-    netnanny = get_netnanny_ref()
+    aegis = get_aegis_ref()
     buf = ctypes.create_string_buffer(65536)
-    netnanny.integrity_query_packages(challenge.encode(), buf, 65536)
+    aegis.integrity_query_packages(challenge.encode(), buf, 65536)
     try:
         return json.loads(buf.value)
     except Exception:
@@ -1018,9 +1024,9 @@ def process_integrity_verify(request: Request):
     """
     challenge = request.state.decrypted.get("challenge", "")
     modules = request.state.decrypted.get("modules", "")
-    netnanny = get_netnanny_ref()
+    aegis = get_aegis_ref()
     buf = ctypes.create_string_buffer(131072)
-    netnanny.integrity_query_verify(
+    aegis.integrity_query_verify(
         challenge.encode(),
         modules.encode() if isinstance(modules, str) else modules,
         buf,
@@ -1037,9 +1043,9 @@ def process_maps_query(request: Request):
     Query /proc/self/maps and LD_PRELOAD for remote validator introspection.
     Returns LD_PRELOAD value + deduplicated list of loaded .so paths.
     """
-    netnanny = get_netnanny_ref()
+    aegis = get_aegis_ref()
     buf = ctypes.create_string_buffer(65536)
-    ret = netnanny.integ_query_maps(buf, 65536)
+    ret = aegis.integ_query_maps(buf, 65536)
     if ret < 0:
         return {"error": "integ_query_maps failed"}
     return Response(
@@ -1725,12 +1731,12 @@ async def _gather_devices_and_initialize(
     body["py_dirs"] = list(set(site.getsitepackages() + [site.getusersitepackages()]))
 
     # NetNanny configuration.
-    netnanny = get_netnanny_ref()
+    aegis = get_aegis_ref()
     egress = token_data.get("egress", False)
+    lock_modules = token_data.get("lock_modules", False)
     body["egress"] = egress
-    body["netnanny_hash"] = netnanny.generate_challenge_response(
-        token_data["sub"].encode()
-    ).decode()
+    body["lock_modules"] = lock_modules
+    body["netnanny_hash"] = aegis.generate_challenge_response(token_data["sub"].encode()).decode()
     body["fsv"] = await generate_filesystem_hash(token_data["sub"], chute_abspath, mode="full")
 
     # Runtime integrity (already initialized at this point).
@@ -1803,7 +1809,7 @@ async def _gather_devices_and_initialize(
         else:
             logger.warning("Failed to derive aegis session key - using legacy encryption")
 
-    return egress, symmetric_key, response
+    return egress, lock_modules, symmetric_key, response
 
 
 # Run a chute (which can be an async job or otherwise long-running process).
@@ -1846,42 +1852,42 @@ def run_chute(
             sys.exit(137)
 
         # Configure net-nanny.
-        netnanny = get_netnanny_ref() if not (dev or generate_inspecto_hash) else None
+        aegis = get_aegis_ref() if not (dev or generate_inspecto_hash) else None
 
         # If the LD_PRELOAD is already in place, unlock network in dev mode.
         if dev:
             if _aegis_available_for_dev():
                 try:
-                    netnanny = get_netnanny_ref()
-                    rc = netnanny.initialize_network_control()
+                    aegis = get_aegis_ref()
+                    rc = aegis.initialize_network_control()
                     logger.info(f"[dev] initialize_network_control() returned {rc}")
-                    rc = netnanny.unlock_network()
+                    rc = aegis.unlock_network()
                     logger.info(f"[dev] unlock_network() returned {rc}")
-                    logger.info(f"[dev] is_network_locked() = {netnanny.is_network_locked()}")
+                    logger.info(f"[dev] is_network_locked() = {aegis.is_network_locked()}")
                 except Exception as e:
-                    logger.error(f"[dev] netnanny unlock failed: {type(e).__name__}: {e}")
+                    logger.error(f"[dev] aegis unlock failed: {type(e).__name__}: {e}")
             else:
-                logger.info("[dev] aegis not available, skipping netnanny unlock")
+                logger.info("[dev] aegis not available, skipping network unlock")
 
         if not (dev or generate_inspecto_hash):
             challenge = secrets.token_hex(16).encode("utf-8")
-            response = netnanny.generate_challenge_response(challenge)
-            if netnanny.set_secure_env() != 0:
+            response = aegis.generate_challenge_response(challenge)
+            if aegis.set_secure_env() != 0:
                 logger.error("NetNanny failed to set secure environment, aborting")
                 sys.exit(137)
             try:
                 if not response:
                     logger.error("NetNanny validation failed: no response")
                     sys.exit(137)
-                if netnanny.verify_challenge_response(challenge, response, 0) != 1:
+                if aegis.verify_challenge_response(challenge, response, 0) != 1:
                     logger.error("NetNanny validation failed: invalid response")
                     sys.exit(137)
-                if netnanny.initialize_network_control() != 0:
+                if aegis.initialize_network_control() != 0:
                     logger.error("Failed to initialize network control")
                     sys.exit(137)
 
                 # Ensure policy is respected.
-                netnanny.lock_network()
+                aegis.lock_network()
                 request_succeeded = False
                 try:
                     async with aiohttp.ClientSession(raise_for_status=True) as session:
@@ -1910,11 +1916,11 @@ def run_chute(
                     )
                     sys.exit(137)
                 # Keep network unlocked for initialization (download models etc.)
-                if netnanny.unlock_network() != 0:
+                if aegis.unlock_network() != 0:
                     logger.error("Failed to unlock network")
                     sys.exit(137)
-                response = netnanny.generate_challenge_response(challenge)
-                if netnanny.verify_challenge_response(challenge, response, 1) != 1:
+                response = aegis.generate_challenge_response(challenge)
+                if aegis.verify_challenge_response(challenge, response, 1) != 1:
                     logger.error("NetNanny validation failed: invalid response")
                     sys.exit(137)
                 logger.debug("NetNanny initialized and network unlocked")
@@ -2186,12 +2192,14 @@ def run_chute(
         job_status_url: str | None = None
         activation_url: str | None = None
         allow_external_egress: bool | None = False
+        lock_modules: bool = False
 
         chute_filename = os.path.basename(chute_ref_str.split(":")[0] + ".py")
         chute_abspath: str = os.path.abspath(os.path.join(os.getcwd(), chute_filename))
         if token:
             (
                 allow_external_egress,
+                lock_modules,
                 symmetric_key,
                 response,
             ) = await _gather_devices_and_initialize(
@@ -2217,7 +2225,7 @@ def run_chute(
             encrypted_cache = response.get("efs") is True
             if (
                 fs_key
-                and netnanny.set_secure_fs(chute_abspath.encode(), fs_key.encode(), encrypted_cache)
+                and aegis.set_secure_fs(chute_abspath.encode(), fs_key.encode(), encrypted_cache)
                 != 0
             ):
                 logger.error("NetNanny failed to set secure FS, aborting!")
@@ -2234,12 +2242,32 @@ def run_chute(
             logger.error("No GraVal token supplied!")
             sys.exit(1)
 
+        # Module lock: if token says lock_modules=True (e.g. standard templates),
+        # engage immediately before any user code runs. If False (default), modules
+        # stay unlocked so startup hooks can pip install etc.
+        if lock_modules:
+            _aegis = get_aegis_ref()
+            if _aegis and _aegis.lock_modules() == 0:
+                logger.success("Module lock engaged (lock_modules=True)")
+            else:
+                logger.warning("Failed to engage module lock")
+
         # Now we have the chute code available, either because it's dev and the file is plain text here,
         # or it's prod and we've fetched the code from the validator and stored it securely.
         logger.info("[aegis-debug] loading chute ref={}", chute_ref_str)
         chute_module, chute = load_chute(chute_ref_str=chute_ref_str, config_path=None, debug=debug)
         logger.info("[aegis-debug] load_chute complete module={}", chute_module.__name__)
         chute = chute.chute if isinstance(chute, ChutePack) else chute
+
+        # Sanity check: only warn if chute explicitly defines lock_modules and it
+        # disagrees with the JWT value. If the chute doesn't define it (old code),
+        # silently use the JWT value.
+        chute_lock = getattr(chute, "lock_modules", None)
+        if chute_lock is not None and chute_lock != lock_modules:
+            logger.warning(
+                f"lock_modules mismatch: token={lock_modules}, chute={chute_lock} "
+                f"(using token value={lock_modules})"
+            )
         if job_method:
             job_obj = next(j for j in chute._jobs if j.name == job_method)
 
@@ -2323,10 +2351,17 @@ def run_chute(
                                 logger.success(f"Instance activated: {await resp.text()}")
                                 activated = True
                                 if not dev and not allow_external_egress:
-                                    if netnanny.lock_network() != 0:
-                                        logger.error("Failed to unlock network")
+                                    if aegis.lock_network() != 0:
+                                        logger.error("Failed to lock network")
                                         sys.exit(137)
-                                    logger.success("Successfully enabled NetNanny network lock.")
+                                    logger.success("Successfully enabled network lock.")
+                                # Arm aegis — freeze all configuration. No more
+                                # lock/unlock/set calls allowed after this point.
+                                if not dev:
+                                    if aegis.aegis_arm() != 0:
+                                        logger.error("Failed to arm aegis")
+                                        sys.exit(137)
+                                    logger.success("Aegis armed — configuration frozen.")
                                 break
 
                             logger.error(
