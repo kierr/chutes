@@ -443,7 +443,7 @@ class Cord:
                             except Exception:
                                 error_detail = await response.text()
                             logger.error(
-                                f"Failed to generate response from func={self._func.__name__}: {response.status=} -> {error_detail}"
+                                f"Failed to generate response from func={self._func.__name__}: {response.status=}"
                             )
                             raise HTTPException(
                                 status_code=response.status,
@@ -552,7 +552,7 @@ class Cord:
             status = 499
             raise
         except Exception as exc:
-            logger.error(f"Error performing non-streamed call: {exc}")
+            logger.error(f"Error performing non-streamed call: {str(exc)}")
             status = 500
             raise
         finally:
@@ -591,7 +591,7 @@ class Cord:
                         except Exception:
                             error_detail = await response.text()
                         logger.error(
-                            f"Failed to generate response from func={self._func.__name__}: {response.status=} -> {error_detail}"
+                            f"Failed to generate response from func={self._func.__name__}: {response.status=}"
                         )
                         raise HTTPException(
                             status_code=response.status,
@@ -646,7 +646,7 @@ class Cord:
             raise
 
         except Exception as exc:
-            logger.error(f"Error performing stream call: {exc}")
+            logger.error(f"Error performing stream call: {str(exc)}")
             status = 500
             raise
         finally:
