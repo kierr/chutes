@@ -393,6 +393,8 @@ def build_sglang_chute(
         startup_command = f"{sys.executable} -m sglang.launch_server --host 127.0.0.1 --port 10101 --model-path {model_name} {engine_args} --api-key {api_key}"
         if use_mtls:
             startup_command += " --ssl-cert-reqs 2"
+            if "--skip-server-warmup" not in startup_command:
+                startup_command += " --skip-server-warmup"
         command = startup_command.replace("\\\n", " ").replace("\\", " ")
         parts = command.split()
         display_cmd = startup_command.replace(api_key, "*" * len(api_key))
